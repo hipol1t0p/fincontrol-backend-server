@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinControl Frontend Test</title>
+</head>
+<body>
+  <h1>FinControl - Frontend de prueba</h1>
+
+  <hr />
+
+  <h2>Configuración</h2>
+  <label for="baseUrl">Base URL del backend:</label>
+  <input id="baseUrl" type="text" value="http://localhost:3000" size="40" />
+  <button onclick="saveBaseUrl()">Guardar Base URL</button>
+
+  <hr />
+
+  <h2>Registro</h2>
+  <div>
+    <label>Nombre:</label>
+    <input id="registerName" type="text" />
+  </div>
+  <div>
+    <label>Correo:</label>
+    <input id="registerEmail" type="email" />
+  </div>
+  <div>
+    <label>Contraseña:</label>
+    <input id="registerPassword" type="password" />
+  </div>
+  <div>
+    <label>Confirmar contraseña:</label>
+    <input id="registerConfirmPassword" type="password" />
+  </div>
+  <button onclick="register()">Registrar</button>
+
+  <br /><br />
+
+  <button onclick="fillRegisterValid()">Autollenar registro válido</button>
+  <button onclick="fillRegisterMismatch()">Autollenar contraseñas distintas</button>
+  <button onclick="clearRegister()">Limpiar registro</button>
+
+  <hr />
+
+  <h2>Login</h2>
+  <div>
+    <label>Correo:</label>
+    <input id="loginEmail" type="email" />
+  </div>
+  <div>
+    <label>Contraseña:</label>
+    <input id="loginPassword" type="password" />
+  </div>
+  <button onclick="login()">Iniciar sesión</button>
+
+  <br /><br />
+
+  <button onclick="fillLoginValid()">Autollenar login válido</button>
+  <button onclick="fillLoginInvalid()">Autollenar login inválido</button>
+  <button onclick="clearLogin()">Limpiar login</button>
+
+  <hr />
+
+  <h2>Sesión / Token</h2>
+  <div>
+    <label>Token actual:</label>
+  </div>
+  <textarea id="token" rows="8" cols="100"></textarea>
+  <br />
+  <button onclick="saveToken()">Guardar token manual</button>
+  <button onclick="loadToken()">Cargar token guardado</button>
+  <button onclick="clearToken()">Limpiar token</button>
+  <button onclick="logout()">Logout</button>
+
+  <hr />
+
+  <h2>Pruebas de endpoints</h2>
+  <button onclick="healthCheck()">GET /</button>
+  <button onclick="getMe()">GET /api/auth/me</button>
+  <button onclick="getDashboard()">GET /api/dashboard</button>
+  <button onclick="getMeWithFakeToken()">GET /api/auth/me con token falso</button>
+  <button onclick="getDashboardWithoutToken()">GET /api/dashboard sin token</button>
+
+  <hr />
+
+  <h2>Estado actual</h2>
+  <pre id="status">Esperando acciones...</pre>
+
+  <hr />
+
+  <h2>Respuesta completa</h2>
+  <pre id="output"></pre>
+
+  <script>
+    const defaultBaseUrl = "http://localhost:3000";
+
+    window.onload = () => {
+      const savedBaseUrl = localStorage.getItem("fincontrol_base_url");
+      const savedToken = localStorage.getItem("fincontrol_token");
+
+      if (savedBaseUrl) {
+        document.getElementById("baseUrl").value = savedBaseUrl;
+      } else {
+        document.getElementById("baseUrl").value = defaultBaseUrl;
+      }
+
+      if (savedToken) {
+        document.getElementById("token").value = savedToken;
+      }
+
+      setStatus("Frontend de prueba cargado");
+    };
+
+    function getBaseUrl() {
+      return document.getElementById("baseUrl").value.trim();
+    }
+
+    function saveBaseUrl() {
+      localStorage.setItem("fincontrol_base_url", getBaseUrl());
+      setStatus("Base URL guardada");
+    }
+
+    function getToken() {
+      return document.getElementById("token").value.trim();
+    }
+
+    function saveToken() {
+      const token = getToken();
+      localStorage.setItem("fincontrol_token", token);
+      setStatus("Token guardado manualmente");
+    }
+
+    function loadToken() {
+      const token = localStorage.getItem("fincontrol_token") || "";
+      document.getElementById("token").value = token;
+      setStatus("Token cargado desde localStorage");
+    }
+
+    function clearToken() {
+      document.getElementById("token").value = "";
+      localStorage.removeItem("fincontrol_token");
+      setStatus("Token eliminado");
+    }
+
+    function logout() {
+      clearToken();
+      setStatus("Logout realizado");
+      setOutput({ success: true, message: "Sesión cerrada localmente" });
+    }
+
+    function setStatus(message) {
+      document.getElementById("status").textContent = message;
+    }
+
+    function setOutput(data) {
+      document.getElementById("output").textContent =
+        typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    }
+
+    async function request(method, path, body = null, token = null) {
+      const url = `${getBaseUrl()}${path}`;
+      const headers = {
+        "Content-Type": "application/json"
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      const options = {
+        method,
+        headers
+      };
+
+      if (body) {
+        options.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(url, options);
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (error) {
+        data = { message: "La respuesta no es JSON válido" };
+      }
+
+      return {
+        status: response.status,
+        ok: response.ok,
+        data
+      };
+    }
+
+    async function healthCheck() {
+      try {
+        setStatus("Probando GET / ...");
+        const result = await request("GET", "/");
+        setOutput(result);
+        setStatus(`GET / completado con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en GET /");
+      }
+    }
+
+    async function register() {
+      try {
+        setStatus("Registrando usuario...");
+
+        const body = {
+          name: document.getElementById("registerName").value.trim(),
+          email: document.getElementById("registerEmail").value.trim(),
+          password: document.getElementById("registerPassword").value,
+          confirmPassword: document.getElementById("registerConfirmPassword").value
+        };
+
+        const result = await request("POST", "/api/auth/register", body);
+
+        if (result.ok && result.data?.data?.token) {
+          document.getElementById("token").value = result.data.data.token;
+          localStorage.setItem("fincontrol_token", result.data.data.token);
+        }
+
+        setOutput(result);
+        setStatus(`Registro completado con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en registro");
+      }
+    }
+
+    async function login() {
+      try {
+        setStatus("Iniciando sesión...");
+
+        const body = {
+          email: document.getElementById("loginEmail").value.trim(),
+          password: document.getElementById("loginPassword").value
+        };
+
+        const result = await request("POST", "/api/auth/login", body);
+
+        if (result.ok && result.data?.data?.token) {
+          document.getElementById("token").value = result.data.data.token;
+          localStorage.setItem("fincontrol_token", result.data.data.token);
+        }
+
+        setOutput(result);
+        setStatus(`Login completado con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en login");
+      }
+    }
+
+    async function getMe() {
+      try {
+        setStatus("Consultando usuario autenticado...");
+        const token = getToken();
+        const result = await request("GET", "/api/auth/me", null, token);
+        setOutput(result);
+        setStatus(`GET /api/auth/me completado con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en GET /api/auth/me");
+      }
+    }
+
+    async function getDashboard() {
+      try {
+        setStatus("Consultando dashboard...");
+        const token = getToken();
+        const result = await request("GET", "/api/dashboard", null, token);
+        setOutput(result);
+        setStatus(`GET /api/dashboard completado con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en GET /api/dashboard");
+      }
+    }
+
+    async function getMeWithFakeToken() {
+      try {
+        setStatus("Probando /api/auth/me con token falso...");
+        const fakeToken = "esto.es.un.token.falso";
+        const result = await request("GET", "/api/auth/me", null, fakeToken);
+        setOutput(result);
+        setStatus(`Prueba con token falso completada con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en prueba con token falso");
+      }
+    }
+
+    async function getDashboardWithoutToken() {
+      try {
+        setStatus("Probando /api/dashboard sin token...");
+        const result = await request("GET", "/api/dashboard");
+        setOutput(result);
+        setStatus(`Prueba sin token completada con status ${result.status}`);
+      } catch (error) {
+        setOutput(error.message);
+        setStatus("Error en prueba sin token");
+      }
+    }
+
+    function fillRegisterValid() {
+      const timestamp = Date.now();
+      document.getElementById("registerName").value = "Usuario Prueba";
+      document.getElementById("registerEmail").value = `usuario${timestamp}@test.com`;
+      document.getElementById("registerPassword").value = "123456";
+      document.getElementById("registerConfirmPassword").value = "123456";
+      setStatus("Formulario de registro válido autollenado");
+    }
+
+    function fillRegisterMismatch() {
+      const timestamp = Date.now();
+      document.getElementById("registerName").value = "Usuario Error";
+      document.getElementById("registerEmail").value = `error${timestamp}@test.com`;
+      document.getElementById("registerPassword").value = "123456";
+      document.getElementById("registerConfirmPassword").value = "654321";
+      setStatus("Formulario de registro con contraseñas distintas autollenado");
+    }
+
+    function clearRegister() {
+      document.getElementById("registerName").value = "";
+      document.getElementById("registerEmail").value = "";
+      document.getElementById("registerPassword").value = "";
+      document.getElementById("registerConfirmPassword").value = "";
+      setStatus("Formulario de registro limpiado");
+    }
+
+    function fillLoginValid() {
+      document.getElementById("loginEmail").value = document.getElementById("registerEmail").value || "hipolito@example.com";
+      document.getElementById("loginPassword").value = "123456";
+      setStatus("Formulario de login autollenado");
+    }
+
+    function fillLoginInvalid() {
+      document.getElementById("loginEmail").value = "noexiste@test.com";
+      document.getElementById("loginPassword").value = "incorrecta";
+      setStatus("Formulario de login inválido autollenado");
+    }
+
+    function clearLogin() {
+      document.getElementById("loginEmail").value = "";
+      document.getElementById("loginPassword").value = "";
+      setStatus("Formulario de login limpiado");
+    }
+  </script>
+</body>
+</html>
