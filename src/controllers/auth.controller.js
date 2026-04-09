@@ -1,19 +1,15 @@
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const User = require("../models/user");
+const { sendSuccess, sendError } = require("../utils/response");
+const { mapUser } = require("../utils/user.mapper");
+const { generateToken, generatePasswordResetToken } = require("../utils/auth");
 
-const generateToken = (user) => {
-  return jwt.sign(
-    {
-      id: user._id,
-      name: user.name,
-      email: user.email
-    },
-    process.env.JWT_SECRET,
-    {
-      expiresIn: process.env.JWT_EXPIRES_IN || "1d"
-    }
-  );
+const splitName = (fullName = "") => {
+  const parts = fullName.trim().split(/\s+/);
+  const firstName = parts[0] || "";
+  const lastName = parts.slice(1).join(" ") || "";
+  return { firstName, lastName };
 };
 
 const register = async (req, res) => {
@@ -21,63 +17,44 @@ const register = async (req, res) => {
     const { name, email, password, confirmPassword } = req.body;
 
     if (!name || !email || !password || !confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "Todos los campos son obligatorios"
-      });
+      return sendError(res, 400, "Todos los campos son obligatorios");
     }
 
     if (password !== confirmPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "Las contraseñas no coinciden"
-      });
+      return sendError(res, 400, "Las contraseñas no coinciden");
     }
 
     if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: "La contraseña debe tener al menos 6 caracteres"
-      });
+      return sendError(res, 400, "La contraseña debe tener al menos 6 caracteres");
     }
 
-    const existingUser = await User.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
 
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: "Ya existe un usuario con ese correo"
-      });
+      return sendError(res, 409, "Ya existe un usuario con ese correo");
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const { firstName, lastName } = splitName(name);
 
     const user = await User.create({
-      name,
-      email,
+      name: name.trim(),
+      firstName,
+      lastName,
+      email: normalizedEmail,
       password: hashedPassword
     });
 
     const token = generateToken(user);
 
-    return res.status(201).json({
-      success: true,
-      message: "Usuario registrado correctamente",
-      data: {
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email
-        },
-        token
-      }
+    return sendSuccess(res, 201, "Usuario registrado correctamente", {
+      user: mapUser(user),
+      token
     });
   } catch (error) {
     console.error("Error en register:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error interno del servidor"
-    });
+    return sendError(res, 500, "Error interno del servidor");
   }
 };
 
@@ -86,73 +63,167 @@ const login = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Correo y contraseña son obligatorios"
-      });
+      return sendError(res, 400, "Correo y contraseña son obligatorios");
     }
 
-    const user = await User.findOne({ email });
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Credenciales inválidas"
-      });
+      return sendError(res, 401, "Credenciales inválidas");
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: "Credenciales inválidas"
-      });
+      return sendError(res, 401, "Credenciales inválidas");
     }
+
+    user.lastLoginAt = new Date();
+    await user.save();
 
     const token = generateToken(user);
 
-    return res.status(200).json({
-      success: true,
-      message: "Inicio de sesión exitoso",
-      data: {
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email
-        },
-        token
-      }
+    return sendSuccess(res, 200, "Inicio de sesión exitoso", {
+      user: mapUser(user),
+      token
     });
   } catch (error) {
     console.error("Error en login:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error interno del servidor"
-    });
+    return sendError(res, 500, "Error interno del servidor");
   }
 };
 
 const me = async (req, res) => {
   try {
-    return res.status(200).json({
-      success: true,
-      message: "Usuario autenticado",
-      data: {
-        user: req.user
-      }
+    return sendSuccess(res, 200, "Usuario autenticado", {
+      user: mapUser(req.user)
     });
   } catch (error) {
     console.error("Error en me:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Error interno del servidor"
+    return sendError(res, 500, "Error interno del servidor");
+  }
+};
+
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return sendError(res, 400, "El correo es obligatorio");
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return sendSuccess(
+        res,
+        200,
+        "Si el correo existe, se enviarán instrucciones de recuperación"
+      );
+    }
+
+    const resetToken = generatePasswordResetToken();
+    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpires = new Date(Date.now() + 1000 * 60 * 30);
+    await user.save();
+
+    return sendSuccess(
+      res,
+      200,
+      "Si el correo existe, se enviarán instrucciones de recuperación",
+      {
+        resetToken
+      }
+    );
+  } catch (error) {
+    console.error("Error en forgotPassword:", error);
+    return sendError(res, 500, "Error interno del servidor");
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { token, password, confirmPassword } = req.body;
+
+    if (!token || !password || !confirmPassword) {
+      return sendError(res, 400, "Todos los campos son obligatorios");
+    }
+
+    if (password !== confirmPassword) {
+      return sendError(res, 400, "Las contraseñas no coinciden");
+    }
+
+    if (password.length < 6) {
+      return sendError(res, 400, "La contraseña debe tener al menos 6 caracteres");
+    }
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: new Date() }
     });
+
+    if (!user) {
+      return sendError(res, 400, "Token inválido o expirado");
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
+    await user.save();
+
+    return sendSuccess(res, 200, "Contraseña restablecida correctamente");
+  } catch (error) {
+    console.error("Error en resetPassword:", error);
+    return sendError(res, 500, "Error interno del servidor");
+  }
+};
+
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return sendError(res, 400, "Todos los campos son obligatorios");
+    }
+
+    if (newPassword !== confirmPassword) {
+      return sendError(res, 400, "Las contraseñas no coinciden");
+    }
+
+    if (newPassword.length < 6) {
+      return sendError(res, 400, "La nueva contraseña debe tener al menos 6 caracteres");
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return sendError(res, 404, "Usuario no encontrado");
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return sendError(res, 401, "La contraseña actual no es válida");
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    return sendSuccess(res, 200, "Contraseña actualizada correctamente");
+  } catch (error) {
+    console.error("Error en changePassword:", error);
+    return sendError(res, 500, "Error interno del servidor");
   }
 };
 
 module.exports = {
   register,
   login,
-  me
+  me,
+  forgotPassword,
+  resetPassword,
+  changePassword
 };
